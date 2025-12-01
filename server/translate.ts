@@ -18,7 +18,6 @@ const UNICODE_RANGES = {
   basic: { name: 'Basic Latin', min: 0x0041, max: 0x005a, code: 'en' },
 };
 
-// Script detection table
 interface ScriptAnalysis {
   scripts: Map<string, number>;
   dominantScript: string;
@@ -32,14 +31,12 @@ function analyzeTextScript(text: string): ScriptAnalysis {
   for (let i = 0; i < text.length; i++) {
     const charCode = text.charCodeAt(i);
     
-    // Skip spaces and punctuation
     if (charCode <= 0x0020 || (charCode >= 0x0021 && charCode <= 0x002f)) {
       continue;
     }
 
     totalChars++;
 
-    // Check which range this character belongs to
     if (charCode >= UNICODE_RANGES.chineseKanji.min && charCode <= UNICODE_RANGES.chineseKanji.max) {
       scripts.set('Chinese', (scripts.get('Chinese') || 0) + 1);
     } else if (charCode >= UNICODE_RANGES.hiragana.min && charCode <= UNICODE_RANGES.hiragana.max) {
@@ -57,7 +54,6 @@ function analyzeTextScript(text: string): ScriptAnalysis {
     }
   }
 
-  // Find dominant script
   let dominantScript = 'Unknown';
   let dominantLanguage = 'unknown';
   let maxCount = 0;
@@ -69,7 +65,6 @@ function analyzeTextScript(text: string): ScriptAnalysis {
     }
   });
 
-  // Map script to language code
   if (dominantScript === 'Chinese') dominantLanguage = 'zh';
   else if (dominantScript === 'Hiragana' || dominantScript === 'Katakana') dominantLanguage = 'ja';
   else if (dominantScript === 'Hangul') dominantLanguage = 'ko';
@@ -79,7 +74,6 @@ function analyzeTextScript(text: string): ScriptAnalysis {
   return { scripts, dominantScript, dominantLanguage };
 }
 
-// Protected names that should not be translated
 const PROTECTED_NAMES = ["Meme", "めめ"];
 const PLACEHOLDER_PREFIX = "__PROTECTED_NAME_";
 
@@ -108,11 +102,9 @@ function restoreProtectedNames(text: string, replacements: Map<string, string>):
 }
 
 let lastRequestTime = 0;
-// En producción (Render), Google es más estricto: usa 3s. En desarrollo: usa 2s
-const MIN_REQUEST_INTERVAL = process.env.NODE_ENV === "production" ? 3500 : 2000;
-const MAX_RETRIES = process.env.NODE_ENV === "production" ? 2 : 1;
+const MIN_REQUEST_INTERVAL = 1000;
 
-async function rateLimitedFetch(url: string, options: RequestInit): Promise<Response> {
+async function applyRateLimit(): Promise<void> {
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
 
@@ -123,29 +115,6 @@ async function rateLimitedFetch(url: string, options: RequestInit): Promise<Resp
   }
 
   lastRequestTime = Date.now();
-  
-  // En producción, reintentar si recibe 429
-  if (process.env.NODE_ENV === "production") {
-    let retries = 0;
-    while (retries < MAX_RETRIES) {
-      const response = await fetch(url, options);
-      
-      if (response.status === 429) {
-        retries++;
-        if (retries < MAX_RETRIES) {
-          const waitTime = 5000 * retries; // 5s, 10s
-          console.log(`[RATE LIMIT] 429 en producción. Esperando ${waitTime}ms...`);
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
-        } else {
-          return response;
-        }
-      } else {
-        return response;
-      }
-    }
-  }
-  
-  return fetch(url, options);
 }
 
 export async function translateMessage(
@@ -168,7 +137,6 @@ export async function translateMessage(
     };
   }
   
-  // Check if message is only whitespace and punctuation (but allow Asian characters)
   const hasValidChars = /[a-zA-Z0-9\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u0400-\u04ff]/u.test(text);
   if (!hasValidChars) {
     return {
@@ -179,31 +147,26 @@ export async function translateMessage(
     };
   }
 
-  // Analyze the script of the input text
   const scriptAnalysis = analyzeTextScript(text);
-  console.log(`[SCRIPT DETECTION] Text: "${text}", Dominant Script: ${scriptAnalysis.dominantScript}, Language: ${scriptAnalysis.dominantLanguage}`);
-  console.log(`[SCRIPT TABLE] ${JSON.stringify(Array.from(scriptAnalysis.scripts.entries()))}`);
+  console.log(`[SCRIPT DETECTION] Text: "${text}", Dominant Script: ${scriptAnalysis.dominantScript}`);
 
   try {
     console.log(`[TRANSLATING] "${text}" to ${targetLanguage}`);
+    await applyRateLimit();
 
-    // Protect names from translation
     const { text: processedText, replacements } = replaceProtectedNames(text);
 
-    // Build the request body with proper encoding for Asian languages
-    const params = new URLSearchParams();
-    params.append("client", "gtx");
-    params.append("sl", "auto");
-    params.append("tl", targetLanguage);
-    params.append("dt", "t");
-    params.append("q", processedText);
+    const url = new URL("https://translate.googleapis.com/translate_a/single");
+    url.searchParams.set("client", "gtx");
+    url.searchParams.set("sl", "auto");
+    url.searchParams.set("tl", targetLanguage);
+    url.searchParams.set("dt", "t");
+    url.searchParams.set("q", processedText);
 
-    const response = await rateLimitedFetch("https://translate.googleapis.com/translate_a/single", {
-      method: "POST",
+    const response = await fetch(url.toString(), {
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      },
-      body: params.toString(),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
     });
 
     if (!response.ok) {
@@ -220,21 +183,15 @@ export async function translateMessage(
     let translatedText = result[0]?.[0]?.[0] || text;
     const apiDetectedLanguage = result[2] || "unknown";
     
-    // Restore protected names
     translatedText = restoreProtectedNames(translatedText, replacements);
     
-    console.log(`[API RESULT] API detected: "${apiDetectedLanguage}", Text changed: ${translatedText !== text}`);
     console.log(`[TRANSLATION RESULT] "${text}" -> "${translatedText}"`);
     
-    // Normalize language codes
     const normalizedTarget = targetLanguage.split('-')[0].toLowerCase();
-    const normalizedApiDetected = apiDetectedLanguage.split('-')[0].toLowerCase();
-    
-    // Decision: should we translate?
-    // Main logic: if the API detected a different language than target, translate
+    const normalizedApiDetected = (apiDetectedLanguage || "").split('-')[0].toLowerCase();
     const shouldTranslate = normalizedApiDetected !== normalizedTarget && translatedText !== text;
     
-    console.log(`[DECISION] API Detected: ${normalizedApiDetected}, Target: ${normalizedTarget}, Text changed: ${translatedText !== text}, Should Translate: ${shouldTranslate}`);
+    console.log(`[DECISION] API Detected: ${normalizedApiDetected}, Target: ${normalizedTarget}, Should Translate: ${shouldTranslate}`);
 
     const translation: TranslationResult = {
       translatedText,
