@@ -108,7 +108,7 @@ function restoreProtectedNames(text: string, replacements: Map<string, string>):
 }
 
 let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL = 300;
+const MIN_REQUEST_INTERVAL = 1000; // Aumentado de 300ms a 1000ms para evitar 429
 
 async function rateLimitedFetch(url: string, options: RequestInit): Promise<Response> {
   const now = Date.now();
@@ -121,6 +121,31 @@ async function rateLimitedFetch(url: string, options: RequestInit): Promise<Resp
   }
 
   lastRequestTime = Date.now();
+  
+  // Retry con exponential backoff para errores 429
+  let retries = 0;
+  const maxRetries = 3;
+  
+  while (retries < maxRetries) {
+    const response = await fetch(url, options);
+    
+    if (response.status === 429) {
+      retries++;
+      if (retries < maxRetries) {
+        // Esperar con backoff exponencial: 2s, 4s, 8s
+        const waitTime = Math.pow(2, retries) * 1000;
+        console.log(`[RATE LIMIT] 429 recibido. Reintentando en ${waitTime}ms (intento ${retries}/${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      } else {
+        // Después de 3 intentos, retornar la respuesta 429
+        return response;
+      }
+    } else {
+      return response;
+    }
+  }
+  
+  // Nunca debería llegar aquí
   return fetch(url, options);
 }
 
