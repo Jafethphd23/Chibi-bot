@@ -241,7 +241,7 @@ export class TwitchBot {
           console.log(`[SKIP] Message already in target language: ${text}`);
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 2000)); // Aumentado a 2 segundos entre mensajes
       } catch (error) {
         console.error(`[ERROR] Translation processing error:`, error);
         this.emitEvent({

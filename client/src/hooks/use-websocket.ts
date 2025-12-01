@@ -50,7 +50,11 @@ export function useWebSocket(): UseWebSocketReturn {
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const hostname = window.location.hostname;
+    const port = window.location.port;
+    const host = port ? `${hostname}:${port}` : hostname;
+    const wsUrl = `${protocol}//${host}/ws`;
+    console.log("Connecting WebSocket to:", wsUrl);
     
     const createWebSocket = () => {
       const socket = new WebSocket(wsUrl);

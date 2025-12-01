@@ -108,12 +108,21 @@ function restoreProtectedNames(text: string, replacements: Map<string, string>):
 }
 
 let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL = 1000; // Aumentado de 300ms a 1000ms para evitar 429
+let rateLimitResetTime = 0;
+const MIN_REQUEST_INTERVAL = 8000; // 8 segundos entre solicitudes para evitar 429
+const RATE_LIMIT_COOLDOWN = 120000; // 2 minutos de cooldown después de 429
 
 async function rateLimitedFetch(url: string, options: RequestInit): Promise<Response> {
+  // Si estamos en cooldown después de 429, esperar
   const now = Date.now();
-  const timeSinceLastRequest = now - lastRequestTime;
+  if (now < rateLimitResetTime) {
+    const waitTime = rateLimitResetTime - now;
+    console.log(`[RATE LIMIT] En cooldown. Esperando ${waitTime}ms`);
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+  }
 
+  // Esperar el intervalo mínimo entre solicitudes
+  const timeSinceLastRequest = Date.now() - lastRequestTime;
   if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
     await new Promise((resolve) =>
       setTimeout(resolve, MIN_REQUEST_INTERVAL - timeSinceLastRequest)
@@ -124,28 +133,34 @@ async function rateLimitedFetch(url: string, options: RequestInit): Promise<Resp
   
   // Retry con exponential backoff para errores 429
   let retries = 0;
-  const maxRetries = 3;
+  const maxRetries = 5;
   
   while (retries < maxRetries) {
     const response = await fetch(url, options);
     
     if (response.status === 429) {
       retries++;
+      // Establecer cooldown global
+      rateLimitResetTime = Date.now() + RATE_LIMIT_COOLDOWN;
+      
       if (retries < maxRetries) {
-        // Esperar con backoff exponencial: 2s, 4s, 8s
-        const waitTime = Math.pow(2, retries) * 1000;
+        // Esperar con backoff exponencial: 5s, 10s, 20s, 40s, 80s
+        const waitTime = Math.pow(2, retries) * 5000;
         console.log(`[RATE LIMIT] 429 recibido. Reintentando en ${waitTime}ms (intento ${retries}/${maxRetries})`);
         await new Promise((resolve) => setTimeout(resolve, waitTime));
+        lastRequestTime = Date.now() + waitTime;
       } else {
-        // Después de 3 intentos, retornar la respuesta 429
+        // Después de 5 intentos, retornar la respuesta 429
+        console.log(`[RATE LIMIT] Máximos reintentos alcanzados`);
         return response;
       }
     } else {
+      // Reset cooldown en caso de éxito
+      rateLimitResetTime = 0;
       return response;
     }
   }
   
-  // Nunca debería llegar aquí
   return fetch(url, options);
 }
 
